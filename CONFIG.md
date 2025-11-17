@@ -105,7 +105,7 @@ export MERLIN_TIMEFRAME="4h"
 # API Keys
 export GEMINI_API_KEY="your-api-key-here"
 export OPENAI_API_KEY="sk-your-key-here"  # If using OpenAI
-export CRYPTOPANIC_TOKEN="your-token"     # For news sentiment
+# Note: News sentiment sources are disabled by default (can be added in config.py if needed)
 
 # Storage
 export MERLIN_CACHE_DIR="~/.cache/merlincli"

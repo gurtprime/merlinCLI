@@ -5,7 +5,7 @@ MerlinCLI is a modular research stack that fetches BTC/USD market data, computes
 ## Features
 - **Market Data Client** – pulls OHLCV candles with `ccxt` (Binance by default) and caches recent responses in SQLite.
 - **Indicator Engine** – computes EMA, SMA, RSI, MACD, Bollinger Bands, and volume/volatility diagnostics with `pandas-ta`.
-- **News & Social Client** – ingests crypto headlines/Tweets via configurable HTTP sources with retry + fallback samples.
+- **News & Social Client** – optional sentiment data ingestion via configurable HTTP sources (disabled by default; can be configured in `config.py`).
 - **Sentiment Engine** – aggregates VADER scores into buzz, bias, and compound readings.
 - **Analysis Engine** – blends technical + sentiment signals into an interpretable regime and deterministic recommendation.
 - **LLM Insights** – crafts structured prompts for OpenAI or Gemini (with heuristic fallback) and parses JSON guidance.
@@ -44,7 +44,6 @@ src/merlincli/
    ```bash
    export OPENAI_API_KEY=\"sk-...\"       # OpenAI LLM insights
    export GEMINI_API_KEY=\"...\"          # Google Gemini LLM insights
-   export CRYPTOPANIC_TOKEN=\"...\"       # news/social client
    ```
 4. Run the CLI (make sure venv is activated):
    ```bash

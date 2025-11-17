@@ -21,9 +21,9 @@ class DataManager:
 
     def _freq_from_timeframe(self) -> str:
         mapping = {
-            "1m": "1T",
-            "5m": "5T",
-            "15m": "15T",
+            "1m": "1min",
+            "5m": "5min",
+            "15m": "15min",
             "1h": "1h",
             "4h": "4h",
             "1d": "1D",

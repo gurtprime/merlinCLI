@@ -26,7 +26,7 @@ class SentimentSource:
 @dataclass(slots=True)
 class SentimentConfig:
     sources: Sequence[SentimentSource] = field(
-        default_factory=lambda: [SentimentSource(name="cryptopanic")]
+        default_factory=list  # No default sources - cryptopanic removed (free plan has 24h old news)
     )
     window_hours: int = 24
 
