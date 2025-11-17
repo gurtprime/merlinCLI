@@ -53,8 +53,13 @@ class LLMInsightsClient:
             "instruction": (
                 "You are a cautious crypto markets strategist. Review the provided "
                 "technical and sentiment signals for BTC/USD and return a JSON "
-                "object with fields recommendation (LONG/SHORT/NEUTRAL), rationale, "
-                "risks, and key_levels (array)."
+                "object with fields:\n"
+                "- recommendation: LONG/SHORT/NEUTRAL\n"
+                "- rationale: detailed explanation of the recommendation\n"
+                "- risks: list of key risks (as string or array)\n"
+                "- key_levels: array of objects with 'type' (resistance/support/level), "
+                "'value' (price level as number), and 'description' (brief explanation of why this level matters). "
+                "Include 2-4 key levels with meaningful descriptions."
             ),
             "signals": signal_bundle,
         }
@@ -168,14 +173,27 @@ class LLMInsightsClient:
             if isinstance(item, str):
                 result.append(item)
             elif isinstance(item, dict):
-                # Format as "type: value (description)" if available
+                # Format as "type: value - description" if available
                 level_type = item.get("type", "level")
-                value = item.get("value") or item.get("level", "N/A")
-                desc = item.get("description", "")
-                if desc:
-                    result.append(f"{level_type}: {value} - {desc}")
+                value = item.get("value") or item.get("level") or item.get("price", "N/A")
+                # Try multiple description fields
+                desc = (
+                    item.get("description") 
+                    or item.get("desc") 
+                    or item.get("note")
+                    or item.get("text")
+                    or ""
+                )
+                # Format value nicely
+                if isinstance(value, (int, float)):
+                    value_str = f"{value:,.2f}"
                 else:
-                    result.append(f"{level_type}: {value}")
+                    value_str = str(value)
+                
+                if desc and str(desc).strip():
+                    result.append(f"{level_type}: {value_str} - {desc}")
+                else:
+                    result.append(f"{level_type}: {value_str}")
             else:
                 result.append(str(item))
         return result

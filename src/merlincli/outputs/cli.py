@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import click
@@ -11,6 +12,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.layout import Layout
 
 from ..config import DEFAULT_CONFIG, PipelineConfig
 from ..pipeline import MerlinPipeline
@@ -48,6 +50,210 @@ def _format_value(value: float | int | str, key: str = "") -> str:
         else:
             return f"{value:.2f}"
     return str(value)
+
+
+def _parse_key_levels(key_levels: list) -> tuple[list[dict], float, float]:
+    """Parse key levels and extract price values."""
+    levels = []
+    prices = []
+    
+    for level in key_levels:
+        if isinstance(level, str):
+            # Parse "Type: Value - Description" or "Type: Value" or "Type: Value Description"
+            if ":" in level:
+                parts = level.split(":", 1)
+                level_type = parts[0].strip().lower()
+                rest = parts[1].strip()
+                
+                # Extract price value - try multiple patterns
+                value_str = None
+                desc = ""
+                
+                # Pattern 1: "Value - Description"
+                if " - " in rest:
+                    value_str = rest.split(" - ")[0].strip()
+                    desc = rest.split(" - ", 1)[1].strip()
+                # Pattern 2: "Value Description" (number followed by text)
+                else:
+                    # Find first number in the string
+                    numbers = re.findall(r'\d+\.?\d*', rest)
+                    if numbers:
+                        value_str = numbers[0]
+                        # Description is everything after the number
+                        num_pos = rest.find(value_str)
+                        if num_pos >= 0:
+                            desc = rest[num_pos + len(value_str):].strip()
+                
+                if value_str:
+                    try:
+                        # Remove $ and commas, convert to float
+                        value_clean = value_str.replace("$", "").replace(",", "").strip()
+                        price = float(value_clean)
+                        prices.append(price)
+                        levels.append({
+                            "type": level_type,
+                            "price": price,
+                            "description": desc
+                        })
+                    except (ValueError, IndexError):
+                        continue
+            else:
+                # Try to extract number from string
+                numbers = re.findall(r'\d+\.?\d*', level)
+                if numbers:
+                    try:
+                        price = float(numbers[0])
+                        prices.append(price)
+                        levels.append({
+                            "type": "level",
+                            "price": price,
+                            "description": level
+                        })
+                    except ValueError:
+                        pass
+    
+    min_price = min(prices) if prices else 0
+    max_price = max(prices) if prices else 0
+    
+    return levels, min_price, max_price
+
+
+def _create_price_chart(
+    current_price: float,
+    key_levels: list,
+    recommendation: str,
+    height: int = 20
+) -> Text:
+    """Create a visual price chart showing levels and expected movement."""
+    levels, min_price, max_price = _parse_key_levels(key_levels)
+    
+    if not levels:
+        return Text("No price levels available for chart", style="dim")
+    
+    # Add current price to range if needed
+    all_prices = [current_price] + [l["price"] for l in levels]
+    min_price = min(all_prices)
+    max_price = max(all_prices)
+    
+    # Add some padding
+    price_range = max_price - min_price
+    if price_range == 0:
+        price_range = current_price * 0.1  # 10% padding if no range
+    padding = price_range * 0.1
+    min_price -= padding
+    max_price += padding
+    price_range = max_price - min_price
+    
+    # Create chart
+    chart_lines = []
+    
+    # Determine arrow direction based on recommendation
+    if recommendation.upper() == "LONG":
+        arrow = "↑"
+        arrow_style = "green"
+        direction = "UP"
+    elif recommendation.upper() == "SHORT":
+        arrow = "↓"
+        arrow_style = "red"
+        direction = "DOWN"
+    else:
+        arrow = "→"
+        arrow_style = "yellow"
+        direction = "SIDEWAYS"
+    
+    # Sort levels by price
+    sorted_levels = sorted(levels, key=lambda x: x["price"], reverse=True)
+    
+    # Create vertical chart
+    chart_height = height
+    price_step = price_range / (chart_height - 1)
+    
+    # Create a mapping of price to chart line index
+    price_to_line = {}
+    for i in range(chart_height):
+        price_at_line = min_price + (price_range * (i / (chart_height - 1)))
+        price_to_line[price_at_line] = chart_height - 1 - i
+    
+    # Find closest line for each level and current price
+    level_lines = {}
+    for level in sorted_levels:
+        level_price = level["price"]
+        closest_line = min(range(chart_height), 
+                          key=lambda i: abs((min_price + price_range * (i / (chart_height - 1))) - level_price))
+        level_lines[closest_line] = level
+    
+    current_line = min(range(chart_height),
+                      key=lambda i: abs((min_price + price_range * (i / (chart_height - 1))) - current_price))
+    
+    for i in range(chart_height):
+        line_idx = chart_height - 1 - i
+        price_at_line = min_price + (price_range * (i / (chart_height - 1)))
+        
+        line = Text()
+        
+        level_at_line = level_lines.get(line_idx)
+        is_current = (line_idx == current_line)
+        
+        # Left side: price labels
+        if level_at_line:
+            level_type = level_at_line["type"].upper()
+            if "resistance" in level_type or "res" in level_type:
+                line.append(f"${level_at_line['price']:,.0f} ", style="bold red")
+                line.append("▶", style="red")
+            elif "support" in level_type or "sup" in level_type:
+                line.append(f"${level_at_line['price']:,.0f} ", style="bold green")
+                line.append("▶", style="green")
+            else:
+                line.append(f"${level_at_line['price']:,.0f} ", style="bold yellow")
+                line.append("▶", style="yellow")
+        elif is_current:
+            line.append(f"${current_price:,.0f} ", style="bold cyan")
+            line.append("●", style="bold cyan")
+        else:
+            line.append(" " * 12)
+        
+        # Middle: chart area with visual representation
+        if level_at_line:
+            level_type = level_at_line["type"].upper()
+            if "resistance" in level_type or "res" in level_type:
+                line.append("═" * 35, style="red")
+            elif "support" in level_type or "sup" in level_type:
+                line.append("═" * 35, style="green")
+            else:
+                line.append("═" * 35, style="yellow")
+        elif is_current:
+            line.append("─" * 35, style="bold cyan")
+        else:
+            # Show relative position with dots
+            line.append("·" * 35, style="dim white")
+        
+        # Right side: labels
+        if level_at_line:
+            level_type = level_at_line["type"]
+            line.append(f" {level_type.upper()}", style="dim")
+        elif is_current:
+            line.append(f" {arrow} CURRENT ({direction})", style=f"bold {arrow_style}")
+        
+        chart_lines.append(line)
+    
+    # Add summary at bottom
+    summary = Text()
+    summary.append("\nPrice Range: ", style="bold")
+    summary.append(f"${min_price:,.0f}", style="green")
+    summary.append(" → ", style="dim")
+    summary.append(f"${max_price:,.0f}", style="red")
+    summary.append(f" | Current: ", style="bold")
+    summary.append(f"${current_price:,.0f}", style="bold cyan")
+    summary.append(f" | Expected: ", style="bold")
+    summary.append(direction, style=f"bold {arrow_style}")
+    
+    chart_text = Text()
+    for line in chart_lines:
+        chart_text.append(line)
+        chart_text.append("\n")
+    chart_text.append(summary)
+    
+    return chart_text
 
 
 @cli.command()
@@ -205,29 +411,75 @@ def analyze(timeframe: str | None, limit: int | None) -> None:
         console.print(Panel(risks_content, title="⚠️  Risks", border_style="red"))
         console.print()
     
-    # Key Levels
+    # Price Chart with Key Levels
+    if key_levels:
+        chart = _create_price_chart(price, key_levels, llm_rec, height=18)
+        console.print(Panel(chart, title="📊 Price Chart & Key Levels", border_style="cyan"))
+        console.print()
+    
+    # Key Levels Table
     if key_levels:
         levels_table = Table(show_header=True, header_style="bold cyan", border_style="cyan")
         levels_table.add_column("Type", style="cyan", width=15)
         levels_table.add_column("Level", style="white", justify="right")
-        levels_table.add_column("Description", style="dim white")
+        levels_table.add_column("Description", style="dim white", width=60)
         
         for level in key_levels:
-            if isinstance(level, str):
-                # Try to parse "Type: Value - Description" format
+            level_type = "Level"
+            level_value = ""
+            description = ""
+            
+            if isinstance(level, dict):
+                # Handle dict format from LLM
+                level_type = level.get("type", "level")
+                level_value = str(level.get("value") or level.get("level", ""))
+                description = level.get("description", "")
+            elif isinstance(level, str):
+                # Parse string format "Type: Value - Description" or "Type: Value"
                 if ":" in level:
                     parts = level.split(":", 1)
                     level_type = parts[0].strip()
                     rest = parts[1].strip()
+                    
+                    # Try multiple patterns
                     if " - " in rest:
                         value, desc = rest.split(" - ", 1)
-                        levels_table.add_row(level_type, value.strip(), desc.strip())
+                        level_value = value.strip()
+                        description = desc.strip()
                     else:
-                        levels_table.add_row(level_type, rest, "")
+                        # Try to extract number and description
+                        numbers = re.findall(r'\d+\.?\d*', rest)
+                        if numbers:
+                            level_value = numbers[0]
+                            # Description is everything after the number
+                            num_pos = rest.find(level_value)
+                            if num_pos >= 0:
+                                desc_part = rest[num_pos + len(level_value):].strip()
+                                if desc_part:
+                                    description = desc_part
+                        else:
+                            level_value = rest
                 else:
-                    levels_table.add_row("Level", level, "")
-            else:
-                levels_table.add_row("Level", str(level), "")
+                    # Try to extract number from plain string
+                    numbers = re.findall(r'\d+\.?\d*', level)
+                    if numbers:
+                        level_value = numbers[0]
+                        description = level
+                    else:
+                        level_value = level
+            
+            # Format the value nicely
+            try:
+                value_float = float(str(level_value).replace("$", "").replace(",", ""))
+                formatted_value = f"${value_float:,.2f}"
+            except (ValueError, AttributeError):
+                formatted_value = str(level_value) if level_value else "N/A"
+            
+            levels_table.add_row(
+                level_type.title(),
+                formatted_value,
+                description if description else "[dim]No description[/dim]"
+            )
         
         console.print(Panel(levels_table, title="📍 Key Levels", border_style="cyan"))
         console.print()
