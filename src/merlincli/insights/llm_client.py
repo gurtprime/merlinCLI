@@ -95,8 +95,29 @@ class LLMInsightsClient:
 
         if not text:
             return self._fallback_insight(signal_bundle, prompt)
+        
+        # Extract JSON from markdown code blocks if present
+        cleaned_text = text.strip()
+        # Remove markdown code block markers
+        if "```json" in cleaned_text:
+            start = cleaned_text.find("```json") + 7
+            end = cleaned_text.rfind("```")
+            if end > start:
+                cleaned_text = cleaned_text[start:end].strip()
+        elif "```" in cleaned_text:
+            start = cleaned_text.find("```") + 3
+            end = cleaned_text.rfind("```")
+            if end > start:
+                cleaned_text = cleaned_text[start:end].strip()
+        # Try to find JSON object if embedded in text
+        if not cleaned_text.startswith("{"):
+            json_start = cleaned_text.find("{")
+            json_end = cleaned_text.rfind("}") + 1
+            if json_start >= 0 and json_end > json_start:
+                cleaned_text = cleaned_text[json_start:json_end]
+        
         try:
-            data = json.loads(text)
+            data = json.loads(cleaned_text)
         except json.JSONDecodeError:
             data = {
                 "recommendation": signal_bundle["regime"]["recommendation"],
@@ -104,13 +125,60 @@ class LLMInsightsClient:
                 "risks": "Unable to parse structured risks.",
                 "key_levels": [],
             }
+        
+        # Normalize risks to string format
+        risks_value = data.get("risks", "")
+        risks_str = self._normalize_risks(risks_value)
+        
+        # Normalize key_levels to list of strings
+        key_levels = data.get("key_levels", [])
+        key_levels_list = self._normalize_key_levels(key_levels)
+        
         return InsightResult(
             recommendation=data.get("recommendation", "NEUTRAL"),
             rationale=data.get("rationale", text),
-            risks=data.get("risks", ""),
-            key_levels=data.get("key_levels", []),
+            risks=risks_str,
+            key_levels=key_levels_list,
             raw_text=text,
         )
+    
+    def _normalize_risks(self, risks: str | list | dict) -> str:
+        """Convert risks from various formats to a readable string."""
+        if isinstance(risks, str):
+            return risks
+        elif isinstance(risks, list):
+            return "\n".join(f"- {item}" if isinstance(item, str) else f"- {json.dumps(item)}" for item in risks)
+        elif isinstance(risks, dict):
+            lines = []
+            for key, value in risks.items():
+                if isinstance(value, str):
+                    lines.append(f"{key}: {value}")
+                else:
+                    lines.append(f"{key}: {json.dumps(value)}")
+            return "\n".join(lines)
+        else:
+            return str(risks) if risks else ""
+    
+    def _normalize_key_levels(self, key_levels: list | dict) -> list[str]:
+        """Convert key_levels to a list of strings."""
+        if not key_levels:
+            return []
+        result = []
+        for item in key_levels if isinstance(key_levels, list) else [key_levels]:
+            if isinstance(item, str):
+                result.append(item)
+            elif isinstance(item, dict):
+                # Format as "type: value (description)" if available
+                level_type = item.get("type", "level")
+                value = item.get("value") or item.get("level", "N/A")
+                desc = item.get("description", "")
+                if desc:
+                    result.append(f"{level_type}: {value} - {desc}")
+                else:
+                    result.append(f"{level_type}: {value}")
+            else:
+                result.append(str(item))
+        return result
 
     def _fallback_insight(self, signal_bundle: dict, raw_prompt: str) -> InsightResult:
         provider_hint = "Set OPENAI_API_KEY" if self.provider == "openai" else "Set GEMINI_API_KEY"
