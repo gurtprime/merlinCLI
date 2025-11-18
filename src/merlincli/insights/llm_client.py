@@ -15,8 +15,12 @@ except ImportError:  # pragma: no cover
 
 try:  # pragma: no cover - optional dependency at runtime
     import google.generativeai as genai
+    from google.api_core import exceptions as google_exceptions
+    from google.api_core import retry as google_retry
 except ImportError:  # pragma: no cover
     genai = None  # type: ignore
+    google_exceptions = None  # type: ignore
+    google_retry = None  # type: ignore
 
 
 @dataclass
@@ -84,17 +88,63 @@ class LLMInsightsClient:
                 "temperature": self.config.temperature,
                 "max_output_tokens": self.config.max_tokens,
             }
-            response = self.client.generate_content(  # type: ignore[call-arg]
-                prompt,
-                generation_config=generation_config,
-            )
-            text = getattr(response, "text", "") or ""
-            if not text and getattr(response, "candidates", None):
-                candidate = response.candidates[0]
-                content = getattr(candidate, "content", None)
-                parts = getattr(content, "parts", None) if content else None
-                if parts:
-                    text = getattr(parts[0], "text", "") or ""
+            try:
+                # Configure retry policy to NOT retry on ResourceExhausted (429) errors
+                # This prevents the client from automatically retrying and exceeding free tier limits
+                # The free tier allows only 2 requests per minute, so retries would exceed the limit
+                if google_retry:
+                    # Create a retry policy that doesn't retry on ResourceExhausted
+                    custom_retry = google_retry.Retry(
+                        predicate=google_retry.if_exception_type(
+                            # Retry on these exceptions, but NOT on ResourceExhausted
+                            google_exceptions.ServiceUnavailable,
+                            google_exceptions.InternalServerError,
+                        ),
+                        initial=1.0,
+                        maximum=3.0,
+                        multiplier=2.0,
+                        deadline=30.0,
+                    )
+                    request_options = {"retry": custom_retry}
+                else:
+                    request_options = {}
+                
+                response = self.client.generate_content(  # type: ignore[call-arg]
+                    prompt,
+                    generation_config=generation_config,
+                    request_options=request_options,  # type: ignore[arg-type]
+                )
+                text = getattr(response, "text", "") or ""
+                if not text and getattr(response, "candidates", None):
+                    candidate = response.candidates[0]
+                    content = getattr(candidate, "content", None)
+                    parts = getattr(content, "parts", None) if content else None
+                    if parts:
+                        text = getattr(parts[0], "text", "") or ""
+            except Exception as exc:
+                # Handle rate limit errors gracefully
+                if google_exceptions and isinstance(exc, google_exceptions.ResourceExhausted):
+                    error_msg = (
+                        f"Gemini API rate limit exceeded (free tier: 2 requests/minute). "
+                        f"Error: {str(exc)}. "
+                        f"Please wait before retrying or upgrade your API plan."
+                    )
+                    return InsightResult(
+                        recommendation=signal_bundle["regime"]["recommendation"],
+                        rationale=(
+                            "Unable to generate LLM insights due to API rate limit. "
+                            "The free tier allows 2 requests per minute per model. "
+                            "Please wait and try again, or upgrade your Gemini API plan."
+                        ),
+                        risks=error_msg,
+                        key_levels=[
+                            f"Recent price: {signal_bundle['meta']['price']:.2f}",
+                            "Rate limit: Wait 1 minute between requests on free tier",
+                        ],
+                        raw_text="",
+                    )
+                # Re-raise other exceptions
+                raise
         else:
             return self._fallback_insight(signal_bundle, prompt)
 
