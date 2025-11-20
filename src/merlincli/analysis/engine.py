@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
+import pandas as pd
+
 from ..config import MarketConfig
 from ..indicators.engine import IndicatorBundle
 from ..sentiment.engine import SentimentResult
@@ -16,6 +18,7 @@ class SignalBundle:
     technicals: dict
     sentiment: dict
     regime: dict
+    price_history: dict  # Summary of recent price action
 
 
 class AnalysisEngine:
@@ -39,7 +42,14 @@ class AnalysisEngine:
             "price": tech["price"],
         }
         regime = self._compute_regime(tech, sentiment)
-        return SignalBundle(meta=meta, technicals=tech, sentiment=sentiment, regime=regime)
+        price_history = self._extract_price_history(frame)
+        return SignalBundle(
+            meta=meta,
+            technicals=tech,
+            sentiment=sentiment,
+            regime=regime,
+            price_history=price_history,
+        )
 
     def _compute_regime(self, tech: Dict[str, float], sentiment: Dict[str, float]) -> dict:
         trend_score = self._normalize(tech.get("ema_trend", 0.0) + tech.get("sma_trend", 0.0))
@@ -66,3 +76,68 @@ class AnalysisEngine:
     def _normalize(self, value: float) -> float:
         max_abs = 1000.0
         return max(-1.0, min(1.0, value / max_abs))
+
+    def _extract_price_history(self, frame: pd.DataFrame) -> dict:
+        """Extract a summary of recent price history for LLM context."""
+        if frame.empty or "close" not in frame.columns:
+            return {
+                "candles_analyzed": 0,
+                "recent_summary": "No price data available",
+            }
+
+        # Get recent candles (last 50 for context, but summarize)
+        recent = frame.tail(50)
+        close_prices = recent["close"].dropna()
+        
+        if close_prices.empty:
+            return {
+                "candles_analyzed": len(frame),
+                "recent_summary": "Insufficient price data",
+            }
+
+        # Calculate key statistics
+        current_price = float(close_prices.iloc[-1])
+        period_high = float(close_prices.max())
+        period_low = float(close_prices.min())
+        period_open = float(close_prices.iloc[0])
+        
+        # Price change over the period
+        price_change = current_price - period_open
+        price_change_pct = (price_change / period_open * 100) if period_open > 0 else 0.0
+        
+        # Recent trend (last 10 vs previous 10)
+        if len(close_prices) >= 20:
+            recent_10_avg = float(close_prices.tail(10).mean())
+            prev_10_avg = float(close_prices.iloc[-20:-10].mean())
+            short_term_trend = "up" if recent_10_avg > prev_10_avg else "down"
+        else:
+            short_term_trend = "neutral"
+        
+        # Volatility (price range as % of average)
+        avg_price = float(close_prices.mean())
+        price_range_pct = ((period_high - period_low) / avg_price * 100) if avg_price > 0 else 0.0
+        
+        # Volume context if available
+        volume_info = {}
+        if "volume" in recent.columns:
+            volumes = recent["volume"].dropna()
+            if not volumes.empty:
+                volume_info = {
+                    "recent_avg_volume": float(volumes.tail(10).mean()),
+                    "period_avg_volume": float(volumes.mean()),
+                    "volume_trend": "increasing" if len(volumes) >= 10 and float(volumes.tail(5).mean()) > float(volumes.iloc[-10:-5].mean()) else "decreasing",
+                }
+
+        return {
+            "candles_analyzed": len(frame),
+            "recent_period_candles": len(recent),
+            "current_price": current_price,
+            "period_high": period_high,
+            "period_low": period_low,
+            "period_open": period_open,
+            "price_change": round(price_change, 2),
+            "price_change_pct": round(price_change_pct, 2),
+            "short_term_trend": short_term_trend,
+            "price_range_pct": round(price_range_pct, 2),
+            **volume_info,
+        }

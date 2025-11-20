@@ -63,7 +63,13 @@ class LLMInsightsClient:
                 "- risks: list of key risks (as string or array)\n"
                 "- key_levels: array of objects with 'type' (resistance/support/level), "
                 "'value' (price level as number), and 'description' (brief explanation of why this level matters). "
-                "Include 2-4 key levels with meaningful descriptions."
+                "Include 2-4 key levels with meaningful descriptions.\n\n"
+                "You have access to:\n"
+                "- Current technical indicators (RSI, MACD, EMA/SMA trends, Bollinger Bands, etc.)\n"
+                "- Price history summary (recent high/low, price change, trend direction, volume trends)\n"
+                "- Sentiment analysis scores\n"
+                "- Trading regime signals\n"
+                "Use the price_history data to identify meaningful support/resistance levels based on recent price action."
             ),
             "signals": signal_bundle,
         }

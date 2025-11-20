@@ -43,6 +43,7 @@ class MerlinPipeline:
                 "technicals": signals.technicals,
                 "sentiment": signals.sentiment,
                 "regime": signals.regime,
+                "price_history": signals.price_history,
             }
         )
         # Convert indicator frame to dict, handling timestamp serialization
